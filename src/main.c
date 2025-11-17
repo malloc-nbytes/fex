@@ -8,6 +8,7 @@
 #include <forge/set.h>
 #include <forge/logger.h>
 #include <forge/viewer.h>
+#include <forge/array.h>
 
 #include <stdio.h>
 #include <stdint.h>
@@ -44,22 +45,27 @@ typedef struct {
                 size_t w;
                 size_t h;
         } term;
+        struct {
+                size_t i;
+                str_array files;
+        } selection;
         char *filepath;
+        sizet_set marked;
 } fex_context;
 
 static void
-selection_up(size_t *s)
+selection_up(fex_context *ctx)
 {
-        if (*s > 0) {
-                --(*s);
+        if (ctx->selection.i > 0) {
+                --ctx->selection.i;
         }
 }
 
 static void
-selection_down(size_t *s, size_t n)
+selection_down(fex_context *ctx, size_t n)
 {
-        if (*s < n-1) {
-                ++(*s);
+        if (ctx->selection.i < n-1) {
+                ++ctx->selection.i;
         }
 }
 
@@ -100,7 +106,7 @@ rm_file(const char *fp)
         }
 }
 
-static void
+static int
 cd_selection(fex_context *ctx,
              const char  *to)
 {
@@ -108,6 +114,7 @@ cd_selection(fex_context *ctx,
                 free(ctx->filepath);
                 ctx->filepath = forge_io_resolve_absolute_path(to);
                 CD(ctx->filepath, forge_err_wargs("could not cd() to %s", ctx->filepath));
+                return 1;
         } else {
                 char **lns = forge_io_read_file_to_lines(to);
                 size_t lns_n;
@@ -118,7 +125,7 @@ cd_selection(fex_context *ctx,
                 for (size_t i = 0; i < lns_n; ++i) free(lns[i]);
                 free(lns);
         }
-
+        return 0;
 }
 
 static void
@@ -132,8 +139,7 @@ display(fex_context *ctx)
                 forge_err("could not enable raw terminal");
         }
 
-        size_t selection = 0;
-        sizet_set marked = sizet_set_create(sizet_hash, sizet_cmp, NULL);
+        ctx->selection.i = 0;
 
         while (1) {
                 forge_ctrl_clear_terminal();
@@ -146,6 +152,7 @@ display(fex_context *ctx)
                         forge_err_wargs("could not list files in filepath: %s", ctx->filepath);
                 }
 
+                // Put . and .. in correct spots, count files.
                 for (size_t i = 0; files[i]; ++i) {
                         if (!strcmp(files[i], ".")) {
                                 char *tmp = files[0];
@@ -157,16 +164,23 @@ display(fex_context *ctx)
                                 files[i] = tmp;
                         }
                         ++files_n;
+                        dyn_array_append(ctx->selection.files, files[i]);
                 }
 
+                char *abspath = forge_io_resolve_absolute_path(ctx->filepath);
+                printf(YELLOW "%s" RESET ":\n", abspath);
+
+                // Print files
                 for (size_t i = 0; files[i]; ++i) {
+                        printf("  ");
+
                         int should_reset = 0;
 
-                        if (i == selection) {
+                        if (i == ctx->selection.i) {
                                 printf(INVERT);
                                 should_reset = 1;
                         }
-                        if (sizet_set_contains(&marked, i)) {
+                        if (sizet_set_contains(&ctx->marked, i)) {
                                 printf(ORANGE);
                                 should_reset = 1;
                         }
@@ -181,29 +195,36 @@ display(fex_context *ctx)
                 char ch;
                 forge_ctrl_input_type ty = forge_ctrl_get_input(&ch);
 
+                // Handle input
                 switch (ty) {
                 case USER_INPUT_TYPE_ARROW: {
                         if (ch == DOWN_ARROW) {
-                                selection_down(&selection, files_n);
+                                selection_down(ctx, files_n);
                         } else if (ch == UP_ARROW) {
-                                selection_up(&selection);
+                                selection_up(ctx);
                         }
                 } break;
                 case USER_INPUT_TYPE_CTRL: {
-                        if      (ch == CTRL_N) selection_down(&selection, files_n);
-                        else if (ch == CTRL_P) selection_up(&selection);
+                        if      (ch == CTRL_N) selection_down(ctx, files_n);
+                        else if (ch == CTRL_P) selection_up(ctx);
                 } break;
                 case USER_INPUT_TYPE_NORMAL: {
                         if      (ch == 'q') goto done;
-                        else if (ch == 'd') rm_file(files[selection]);
-                        else if (ch == 'j') selection_down(&selection, files_n);
-                        else if (ch == 'k') selection_up(&selection);
-                        else if (ch == '\n') cd_selection(ctx, files[selection]);
+                        else if (ch == 'd') {
+                                rm_file(files[ctx->selection.i]);
+                        }
+                        else if (ch == 'j') selection_down(ctx, files_n);
+                        else if (ch == 'k') selection_up(ctx);
+                        else if (ch == '\n') {
+                                if (cd_selection(ctx, files[ctx->selection.i])) {
+                                        ctx->selection.i = 0;
+                                }
+                        }
                         else if (ch == 'm') {
-                                if (sizet_set_contains(&marked, selection)) {
-                                        sizet_set_remove(&marked, selection);
+                                if (sizet_set_contains(&ctx->marked, ctx->selection.i)) {
+                                        sizet_set_remove(&ctx->marked, ctx->selection.i);
                                 } else {
-                                        sizet_set_insert(&marked, selection);
+                                        sizet_set_insert(&ctx->marked, ctx->selection.i);
                                 }
                         }
                 } break;
@@ -214,6 +235,7 @@ display(fex_context *ctx)
                         free(files[i]);
                 }
                 free(files);
+                free(abspath);
         }
 
  done:
@@ -261,7 +283,12 @@ main(int argc, char **argv)
                         .w = w,
                         .h = h,
                 },
+                .selection = {
+                        .i = 0,
+                        .files = dyn_array_empty(str_array),
+                },
                 .filepath = filepath,
+                .marked = sizet_set_create(sizet_hash, sizet_cmp, NULL)
         };
 
         display(&ctx);
