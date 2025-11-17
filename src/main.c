@@ -62,9 +62,9 @@ selection_up(fex_context *ctx)
 }
 
 static void
-selection_down(fex_context *ctx, size_t n)
+selection_down(fex_context *ctx)
 {
-        if (ctx->selection.i < n-1) {
+        if (ctx->selection.i < ctx->selection.files.len-1) {
                 ++ctx->selection.i;
         }
 }
@@ -141,34 +141,42 @@ display(fex_context *ctx)
 
         ctx->selection.i = 0;
 
+        int changed_dir = 1;
+        char **files    = NULL;
+
         while (1) {
                 forge_ctrl_clear_terminal();
 
                 forge_logger_log(&logger, FORGE_LOG_LEVEL_DEBUG, "directory: %s", ctx->filepath);
 
-                size_t files_n = 0;
-                char **files = ls(ctx->filepath);
-                if (!files) {
-                        forge_err_wargs("could not list files in filepath: %s", ctx->filepath);
-                }
-
-                // Put . and .. in correct spots, count files.
-                for (size_t i = 0; files[i]; ++i) {
-                        if (!strcmp(files[i], ".")) {
-                                char *tmp = files[0];
-                                files[0] = files[i];
-                                files[i] = tmp;
-                        } else if (!strcmp(files[i], "..")) {
-                                char *tmp = files[1];
-                                files[1] = files[i];
-                                files[i] = tmp;
+                if (changed_dir) {
+                        files = ls(ctx->filepath);
+                        if (!files) {
+                                forge_err_wargs("could not list files in filepath: %s", ctx->filepath);
                         }
-                        ++files_n;
-                        dyn_array_append(ctx->selection.files, files[i]);
+                        changed_dir = 0;
+
+                        // Put . and .. in correct spots, count files.
+                        for (size_t i = 0; files[i]; ++i) {
+                                if (!strcmp(files[i], ".")) {
+                                        char *tmp = files[0];
+                                        files[0] = files[i];
+                                        files[i] = tmp;
+                                } else if (!strcmp(files[i], "..")) {
+                                        char *tmp = files[1];
+                                        files[1] = files[i];
+                                        files[i] = tmp;
+                                }
+                                dyn_array_append(ctx->selection.files, files[i]);
+                        }
+
+                        ctx->selection.files.data[0] = files[0];
+                        ctx->selection.files.data[1] = files[1];
                 }
 
                 char *abspath = forge_io_resolve_absolute_path(ctx->filepath);
                 printf(YELLOW "%s" RESET ":\n", abspath);
+                free(abspath);
 
                 // Print files
                 for (size_t i = 0; files[i]; ++i) {
@@ -185,12 +193,14 @@ display(fex_context *ctx)
                                 should_reset = 1;
                         }
 
-                        printf("%s\n", files[i]);
+                        printf("%s\n", ctx->selection.files.data[i]);
 
                         if (should_reset) {
                                 printf(RESET);
                         }
                 }
+
+                printf("%zu %zu\n", ctx->selection.i, ctx->selection.files.len);
 
                 char ch;
                 forge_ctrl_input_type ty = forge_ctrl_get_input(&ch);
@@ -199,13 +209,13 @@ display(fex_context *ctx)
                 switch (ty) {
                 case USER_INPUT_TYPE_ARROW: {
                         if (ch == DOWN_ARROW) {
-                                selection_down(ctx, files_n);
+                                selection_down(ctx);
                         } else if (ch == UP_ARROW) {
                                 selection_up(ctx);
                         }
                 } break;
                 case USER_INPUT_TYPE_CTRL: {
-                        if      (ch == CTRL_N) selection_down(ctx, files_n);
+                        if      (ch == CTRL_N) selection_down(ctx);
                         else if (ch == CTRL_P) selection_up(ctx);
                 } break;
                 case USER_INPUT_TYPE_NORMAL: {
@@ -213,11 +223,12 @@ display(fex_context *ctx)
                         else if (ch == 'd') {
                                 rm_file(files[ctx->selection.i]);
                         }
-                        else if (ch == 'j') selection_down(ctx, files_n);
+                        else if (ch == 'j') selection_down(ctx);
                         else if (ch == 'k') selection_up(ctx);
                         else if (ch == '\n') {
                                 if (cd_selection(ctx, files[ctx->selection.i])) {
                                         ctx->selection.i = 0;
+                                        changed_dir = 1;
                                 }
                         }
                         else if (ch == 'm') {
@@ -231,11 +242,13 @@ display(fex_context *ctx)
                 default: break;
                 }
 
-                for (size_t i = 0; files[i]; ++i) {
-                        free(files[i]);
+                if (changed_dir) {
+                        for (size_t i = 0; files[i]; ++i) {
+                                free(files[i]);
+                        }
+                        free(files);
+                        dyn_array_clear(ctx->selection.files);
                 }
-                free(files);
-                free(abspath);
         }
 
  done:
