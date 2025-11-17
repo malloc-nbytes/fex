@@ -9,6 +9,7 @@
 #include <forge/logger.h>
 #include <forge/viewer.h>
 #include <forge/array.h>
+#include <forge/rdln.h>
 
 #include <stdio.h>
 #include <stdint.h>
@@ -139,6 +140,7 @@ remove_selection(fex_context *ctx)
                                 continue;
                         }
                         rm_file(path);
+                        sizet_set_remove(&ctx->marked, *ar[i]);
                 }
                 free(ar);
         } else {
@@ -147,6 +149,22 @@ remove_selection(fex_context *ctx)
                         return;
                 }
                 rm_file(path);
+        }
+}
+
+static void
+rename_selection(fex_context *ctx)
+{
+        const char *path = ctx->selection.files.data[ctx->selection.i];
+
+        forge_ctrl_cursor_to_first_line();
+        CURSOR_DOWN(ctx->selection.i + 1);
+        forge_ctrl_cursor_to_col(strlen(path)+1);
+
+        char *s = forge_rdln(NULL);
+
+        if (rename(path, s) != 0) {
+                forge_err_wargs("failed to rename `%s` to `%s`", path, s);
         }
 }
 
@@ -197,32 +215,44 @@ display(fex_context *ctx)
                 }
 
                 char *abspath = forge_io_resolve_absolute_path(ctx->filepath);
-                printf(YELLOW "%s" RESET ":\n", abspath);
+                printf("[" PINK BOLD "%s" RESET "]\n", abspath);
                 free(abspath);
+
+                size_t dirs_n = 0;
 
                 // Print files
                 for (size_t i = 0; files[i]; ++i) {
-                        printf("  ");
+                        int is_selected = i == ctx->selection.i;
 
-                        int should_reset = 0;
+                        if (forge_io_is_dir(files[i])) {
+                                printf(BOLD);
+                                ++dirs_n;
+                        } else {
+                                printf(YELLOW);
+                        }
 
-                        if (i == ctx->selection.i) {
+                        if (is_selected) {
                                 printf(INVERT);
-                                should_reset = 1;
                         }
                         if (sizet_set_contains(&ctx->marked, i)) {
                                 printf(ORANGE);
-                                should_reset = 1;
                         }
 
-                        printf("%s\n", ctx->selection.files.data[i]);
+                        printf("%s", ctx->selection.files.data[i]);
 
-                        if (should_reset) {
-                                printf(RESET);
+                        if (is_selected) {
+                                char *abspath = forge_io_resolve_absolute_path(ctx->selection.files.data[i]);
+                                printf(RESET "  " GRAY "%s" RESET "\n", abspath);
+                                free(abspath);
+                        } else {
+                                putchar('\n');
                         }
+
+                        printf(RESET);
                 }
 
-                printf("%zu %zu\n", ctx->selection.i, ctx->selection.files.len);
+                printf(BOLD WHITE "%zu files, %zu directories" RESET "\n",
+                       ctx->selection.files.len - dirs_n, dirs_n - 2);
 
                 char ch;
                 forge_ctrl_input_type ty = forge_ctrl_get_input(&ch);
@@ -243,12 +273,15 @@ display(fex_context *ctx)
                 case USER_INPUT_TYPE_NORMAL: {
                         if      (ch == 'q') goto done;
                         else if (ch == 'd') {
-                                //rm_file(files[ctx->selection.i]);
                                 remove_selection(ctx);
                                 fs_changed = 1;
                         }
                         else if (ch == 'j') selection_down(ctx);
                         else if (ch == 'k') selection_up(ctx);
+                        else if (ch == 'r') {
+                                rename_selection(ctx);
+                                fs_changed = 1;
+                        }
                         else if (ch == '\n') {
                                 if (cd_selection(ctx, files[ctx->selection.i])) {
                                         ctx->selection.i = 0;
