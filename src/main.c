@@ -129,6 +129,28 @@ cd_selection(fex_context *ctx,
 }
 
 static void
+remove_selection(fex_context *ctx)
+{
+        if (sizet_set_size(&ctx->marked) > 0) {
+                size_t **ar = sizet_set_iter(&ctx->marked);
+                for (size_t i = 0; ar[i]; ++i) {
+                        const char *path = ctx->selection.files.data[*ar[i]];
+                        if (!strcmp(path, "..") || !strcmp(path, ".")) {
+                                continue;
+                        }
+                        rm_file(path);
+                }
+                free(ar);
+        } else {
+                const char *path = ctx->selection.files.data[ctx->selection.i];
+                if (!strcmp(path, "..") || !strcmp(path, ".")) {
+                        return;
+                }
+                rm_file(path);
+        }
+}
+
+static void
 display(fex_context *ctx)
 {
         assert(ctx->filepath);
@@ -141,7 +163,7 @@ display(fex_context *ctx)
 
         ctx->selection.i = 0;
 
-        int changed_dir = 1;
+        int fs_changed  = 1;
         char **files    = NULL;
 
         while (1) {
@@ -149,12 +171,12 @@ display(fex_context *ctx)
 
                 forge_logger_log(&logger, FORGE_LOG_LEVEL_DEBUG, "directory: %s", ctx->filepath);
 
-                if (changed_dir) {
+                if (fs_changed) {
                         files = ls(ctx->filepath);
                         if (!files) {
                                 forge_err_wargs("could not list files in filepath: %s", ctx->filepath);
                         }
-                        changed_dir = 0;
+                        fs_changed = 0;
 
                         // Put . and .. in correct spots, count files.
                         for (size_t i = 0; files[i]; ++i) {
@@ -221,14 +243,16 @@ display(fex_context *ctx)
                 case USER_INPUT_TYPE_NORMAL: {
                         if      (ch == 'q') goto done;
                         else if (ch == 'd') {
-                                rm_file(files[ctx->selection.i]);
+                                //rm_file(files[ctx->selection.i]);
+                                remove_selection(ctx);
+                                fs_changed = 1;
                         }
                         else if (ch == 'j') selection_down(ctx);
                         else if (ch == 'k') selection_up(ctx);
                         else if (ch == '\n') {
                                 if (cd_selection(ctx, files[ctx->selection.i])) {
                                         ctx->selection.i = 0;
-                                        changed_dir = 1;
+                                        fs_changed = 1;
                                 }
                         }
                         else if (ch == 'm') {
@@ -242,7 +266,7 @@ display(fex_context *ctx)
                 default: break;
                 }
 
-                if (changed_dir) {
+                if (fs_changed) {
                         for (size_t i = 0; files[i]; ++i) {
                                 free(files[i]);
                         }
