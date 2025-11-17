@@ -19,8 +19,47 @@
 #include <unistd.h>
 #include <string.h>
 #include <assert.h>
+#include <limits.h>
+
+#include <sys/stat.h>
+#include <pwd.h>
+#include <grp.h>
+#include <time.h>
+#include <errno.h>
+
+static void rm_file(const char *fp);
 
 FORGE_SET_TYPE(size_t, sizet_set)
+
+struct {
+        uint32_t flags;
+} g_config;
+
+typedef struct {
+        char        *name;
+        struct stat  st;
+        char        *owner;
+        char        *group;
+        int          stat_failed;
+} FE;
+
+DYN_ARRAY_TYPE(FE, FE_array);
+
+typedef struct {
+        struct {
+                struct termios t;
+                size_t w;
+                size_t h;
+        } term;
+        struct {
+                size_t i;
+                FE_array fes;
+        } entries;
+        char *filepath;
+        sizet_set marked;
+        const char *last_query;
+        size_t hoffset;
+} fex_context;
 
 unsigned
 sizet_hash(size_t *i)
@@ -34,43 +73,76 @@ sizet_cmp(size_t *x, size_t *y)
         return *x - *y;
 }
 
-static void rm_file(const char *fp);
-
-struct {
-        uint32_t flags;
-} g_config;
-
-typedef struct {
-        struct {
-                struct termios t;
-                size_t w;
-                size_t h;
-        } term;
-        struct {
-                size_t i;
-                str_array files;
-        } selection;
-        char *filepath;
-        sizet_set marked;
-        const char *last_query;
-        size_t hoffset;
-} fex_context;
-
 static void minisleep(void) { usleep(800000/2); }
+
+static void
+mode_string(mode_t mode, char buf[11])
+{
+        strcpy(buf, "----------");
+
+        if (S_ISDIR(mode))  buf[0] = 'd';
+        else if (S_ISLNK(mode)) buf[0] = 'l';
+        else if (S_ISBLK(mode)) buf[0] = 'b';
+        else if (S_ISCHR(mode)) buf[0] = 'c';
+        else if (S_ISFIFO(mode)) buf[0] = 'p';
+        else if (S_ISSOCK(mode)) buf[0] = 's';
+
+        if (mode & S_IRUSR) buf[1] = 'r';
+        if (mode & S_IWUSR) buf[2] = 'w';
+        if (mode & S_IXUSR) buf[3] = 'x';
+        if (mode & S_IRGRP) buf[4] = 'r';
+        if (mode & S_IWGRP) buf[5] = 'w';
+        if (mode & S_IXGRP) buf[6] = 'x';
+        if (mode & S_IROTH) buf[7] = 'r';
+        if (mode & S_IWOTH) buf[8] = 'w';
+        if (mode & S_IXOTH) buf[9] = 'x';
+
+        // Sticky bit, setuid, setgid
+        if (mode & S_ISUID) buf[3] = (mode & S_IXUSR) ? 's' : 'S';
+        if (mode & S_ISGID) buf[6] = (mode & S_IXGRP) ? 's' : 'S';
+        if (mode & S_ISVTX) buf[9] = (mode & S_IXOTH) ? 't' : 'T';
+}
+
+static const char *
+human_size(off_t size)
+{
+        static char buf[32];
+        if (size < 1024) snprintf(buf, sizeof(buf), "%4ld ", (long)size);
+        else if (size < 1024*1024) snprintf(buf, sizeof(buf), "%4ldK", (long)(size/1024));
+        else if (size < 1024LL*1024*1024) snprintf(buf, sizeof(buf), "%4ldM", (long)(size/(1024*1024)));
+        else snprintf(buf, sizeof(buf), "%4ldG", (long)(size/(1024*1024*1024)));
+        return buf;
+}
+
+static const char *
+format_time(time_t mtime)
+{
+        static char buf[32];
+        struct tm *tm = localtime(&mtime);
+        if (!tm) return "?\?\?\?-?\?-?\? ?\?:?\?";
+        // Show year if older than 6 months, otherwise show time
+        time_t now = time(NULL);
+        if (now - mtime > 180*24*3600 || now < mtime) {
+                strftime(buf, sizeof(buf), "%b %d  %Y", tm);
+        } else {
+                strftime(buf, sizeof(buf), "%b %d %H:%M", tm);
+        }
+        return buf;
+}
 
 static void
 selection_up(fex_context *ctx)
 {
-        if (ctx->selection.i > 0) {
-                --ctx->selection.i;
+        if (ctx->entries.i > 0) {
+                --ctx->entries.i;
         }
 }
 
 static void
 selection_down(fex_context *ctx)
 {
-        if (ctx->selection.i < ctx->selection.files.len-1) {
-                ++ctx->selection.i;
+        if (ctx->entries.i < ctx->entries.fes.len-1) {
+                ++ctx->entries.i;
         }
 }
 
@@ -142,7 +214,7 @@ remove_selection(fex_context *ctx)
         if (sizet_set_size(&ctx->marked) > 0) {
                 size_t **ar = sizet_set_iter(&ctx->marked);
                 for (size_t i = 0; ar[i]; ++i) {
-                        char *path = ctx->selection.files.data[*ar[i]];
+                        char *path = ctx->entries.fes.data[*ar[i]].name;
                         if (!strcmp(path, "..") || !strcmp(path, ".")) {
                                 continue;
                         }
@@ -151,7 +223,7 @@ remove_selection(fex_context *ctx)
                 }
                 free(ar);
         } else {
-                char *path = ctx->selection.files.data[ctx->selection.i];
+                char *path = ctx->entries.fes.data[ctx->entries.i].name;
                 if (!strcmp(path, "..") || !strcmp(path, ".")) {
                         return;
                 }
@@ -190,10 +262,10 @@ rename_selection(fex_context *ctx)
         clearln(ctx);
         printf(BOLD WHITE "--- Rename ---" RESET);
 
-        const char *path = ctx->selection.files.data[ctx->selection.i];
+        const char *path = ctx->entries.fes.data[ctx->entries.i].name;
 
         forge_ctrl_cursor_to_first_line();
-        CURSOR_DOWN(ctx->selection.i + 1);
+        CURSOR_DOWN(ctx->entries.i + 1);
         forge_ctrl_cursor_to_col(strlen(path)+1);
 
         char *s = forge_rdln(NULL);
@@ -222,16 +294,16 @@ search(fex_context *ctx,
         }
 
         if (!rev) {
-                for (size_t i = ctx->selection.i+1; i < ctx->selection.files.len; ++i) {
-                        if (forge_utils_regex(ctx->last_query, ctx->selection.files.data[i])) {
-                                ctx->selection.i = i;
+                for (size_t i = ctx->entries.i+1; i < ctx->entries.fes.len; ++i) {
+                        if (forge_utils_regex(ctx->last_query, ctx->entries.fes.data[i].name)) {
+                                ctx->entries.i = i;
                                 break;
                         }
                 }
         } else {
-                for (size_t i = ctx->selection.i-1; i > 0; --i) {
-                        if (forge_utils_regex(ctx->last_query, ctx->selection.files.data[i])) {
-                                ctx->selection.i = i;
+                for (size_t i = ctx->entries.i-1; i > 0; --i) {
+                        if (forge_utils_regex(ctx->last_query, ctx->entries.fes.data[i].name)) {
+                                ctx->entries.i = i;
                                 break;
                         }
                 }
@@ -278,19 +350,19 @@ is_like_compar(const void *a,
 static void
 mark_or_unmark_selection(fex_context *ctx, int mark)
 {
-        if (ctx->selection.i == 0) {
-                for (size_t i = 2; i < ctx->selection.files.len; ++i) {
+        if (ctx->entries.i == 0) {
+                for (size_t i = 2; i < ctx->entries.fes.len; ++i) {
                         if (!mark && sizet_set_contains(&ctx->marked, i)) {
                                 sizet_set_remove(&ctx->marked, i);
                         } else if (mark && !sizet_set_contains(&ctx->marked, i)) {
                                 sizet_set_insert(&ctx->marked, i);
                         }
                 }
-        } else if (ctx->selection.i != 1) {
-                if (!mark && sizet_set_contains(&ctx->marked, ctx->selection.i)) {
-                        sizet_set_remove(&ctx->marked, ctx->selection.i);
-                } else if (mark && !sizet_set_contains(&ctx->marked, ctx->selection.i)) {
-                        sizet_set_insert(&ctx->marked, ctx->selection.i);
+        } else if (ctx->entries.i != 1) {
+                if (!mark && sizet_set_contains(&ctx->marked, ctx->entries.i)) {
+                        sizet_set_remove(&ctx->marked, ctx->entries.i);
+                } else if (mark && !sizet_set_contains(&ctx->marked, ctx->entries.i)) {
+                        sizet_set_insert(&ctx->marked, ctx->entries.i);
                 }
                 selection_down(ctx);
         }
@@ -308,7 +380,7 @@ display(fex_context *ctx)
                 forge_err("could not enable raw terminal");
         }
 
-        ctx->selection.i = 0;
+        ctx->entries.i = 0;
 
         int fs_changed  = 1;
         char **files    = NULL;
@@ -328,62 +400,114 @@ display(fex_context *ctx)
                         while (files[count]) ++count;
                         qsort(files, count, sizeof(*files), is_like_compar);
                         for (size_t i = 0; i < count; ++i) {
-                                dyn_array_append(ctx->selection.files, files[i]);
+                                char *fullpath = forge_io_resolve_absolute_path(files[i]);
+                                FE fe = {0};
+                                fe.name = files[i];
+                                fe.owner = NULL;
+                                fe.group = NULL;
+                                fe.stat_failed = (lstat(fullpath, &fe.st) == -1);
+
+                                if (!fe.stat_failed) {
+                                        struct passwd *pw = getpwuid(fe.st.st_uid);
+                                        struct group  *gr = getgrgid(fe.st.st_gid);
+                                        fe.owner = pw ? strdup(pw->pw_name) : strdup("?");
+                                        fe.group = gr ? strdup(gr->gr_name) : strdup("?");
+                                } else {
+                                        fe.owner = strdup("?");
+                                        fe.group = strdup("?");
+                                        memset(&fe.st, 0, sizeof(fe.st));
+                                }
+
+                                dyn_array_append(ctx->entries.fes, fe);
                         }
                 }
 
                 // If we are out-of-bounds (from deleting, marking, etc.) move
                 // to valid location.
-                while (ctx->selection.i > ctx->selection.files.len-1) {
-                        --ctx->selection.i;
+                while (ctx->entries.i > ctx->entries.fes.len-1) {
+                        --ctx->entries.i;
                 }
 
                 // Header
                 char *abspath = forge_io_resolve_absolute_path(ctx->filepath);
-                printf("Directory listing for " BOLD WHITE "%s" RESET "\n", abspath);
+                printf("Directory listing for " INVERT BLUE "%s" RESET "\n", abspath);
                 free(abspath);
-
 
                 // Print files
                 size_t dirs_n = 0;
                 size_t start = ctx->hoffset;
                 size_t end = start + ctx->term.h - 2;
-                if (end > ctx->selection.files.len)
-                        end = ctx->selection.files.len;
+                if (end > ctx->entries.fes.len)
+                        end = ctx->entries.fes.len;
                 for (size_t i = start; i < end; ++i) {
-                        int is_selected = i == ctx->selection.i;
+                        FE *e = &ctx->entries.fes.data[i];
+                        int is_selected = (i == ctx->entries.i);
+                        int is_marked   = sizet_set_contains(&ctx->marked, i);
+                        int is_dir      = !e->stat_failed && S_ISDIR(e->st.st_mode);
 
-                        if (forge_io_is_dir(files[i])) {
-                                printf(BOLD);
+                        if (!strcmp(e->name, "..") || !strcmp(e->name, ".")) {
+                                printf(GRAY);
                                 ++dirs_n;
+                        }
+                        else if (is_dir) {
+                                printf(BOLD CYAN);
+                                ++dirs_n;
+                        } else if (!e->stat_failed && (e->st.st_mode & (S_IXUSR|S_IXGRP|S_IXOTH))) {
+                                printf(GREEN);  // executable
                         } else {
-                                printf(YELLOW);
+                                printf(WHITE);
                         }
 
+                        if (is_selected) printf(INVERT);
+                        if (is_marked)   printf(PINK "<M> ");
+
+                        char modebuf[11] = "??????????";
+                        if (!e->stat_failed) mode_string(e->st.st_mode, modebuf);
+
+                        const char *size_str = e->stat_failed ? "     ? " : human_size(e->st.st_size);
+                        const char *time_str = e->stat_failed ? "?????????????" : format_time(e->st.st_mtime);
+
+                        printf("%s %3ld %-8s %-8s %s %s %s",
+                               modebuf,
+                               e->stat_failed ? 0L : (long)e->st.st_nlink,
+                               e->owner ? e->owner : "?",
+                               e->group ? e->group : "?",
+                               size_str,
+                               time_str,
+                               e->name);
+
+                        // Symlink target
+                        if (!e->stat_failed && S_ISLNK(e->st.st_mode)) {
+                                char fullpath[PATH_MAX];
+                                snprintf(fullpath, sizeof(fullpath), "%s/%s", ctx->filepath, e->name);
+                                char target[PATH_MAX];
+                                ssize_t len = readlink(fullpath, target, sizeof(target)-1);
+                                if (len != -1) {
+                                        target[len] = '\0';
+                                        printf(" -> " CYAN "%s" RESET, target);
+                                }
+                        }
+
+                        // Show ghosted full path on selected line
                         if (is_selected) {
-                                printf(INVERT);
-                        }
-                        if (sizet_set_contains(&ctx->marked, i)) {
-                                printf(PINK);
-                                printf("<M> ");
-                        }
-
-                        printf("%s", ctx->selection.files.data[i]);
-
-                        if (is_selected) {
-                                char *abspath = forge_io_resolve_absolute_path(ctx->selection.files.data[i]);
-                                printf(RESET "  " GRAY "%s" RESET "\n", abspath);
-                                free(abspath);
-                        } else {
-                                putchar('\n');
+                                char fullpath[PATH_MAX];
+                                snprintf(fullpath, sizeof(fullpath), "%s/%s", ctx->filepath, e->name);
+                                char *abs = forge_io_resolve_absolute_path(fullpath);
+                                printf(RESET "  " ITALIC GRAY "%s" RESET, abs);
+                                free(abs);
                         }
 
+                        putchar('\n');
                         printf(RESET);
                 }
 
                 // Directory status
-                printf(BOLD WHITE "%zu files, %zu directories" RESET " [" YELLOW "%zu" RESET "/" YELLOW "%zu" RESET "]\n",
-                       ctx->selection.files.len - dirs_n, dirs_n - 2, ctx->selection.i+1, ctx->selection.files.len);
+                printf(BOLD WHITE "%zu items" RESET "  (%zu dirs)" RESET "  [" YELLOW "%zu" RESET "/" YELLOW "%zu" RESET "]\n",
+                       ctx->entries.fes.len - 2,
+                       dirs_n - 2,
+                       ctx->entries.i+1,
+                       ctx->entries.fes.len);
+
 
                 char ch;
                 forge_ctrl_input_type ty = forge_ctrl_get_input(&ch);
@@ -414,8 +538,8 @@ display(fex_context *ctx)
                                 fs_changed = rename_selection(ctx);
                         }
                         else if (ch == '\n') {
-                                if (cd_selection(ctx, files[ctx->selection.i])) {
-                                        ctx->selection.i = 0;
+                                if (cd_selection(ctx, ctx->entries.fes.data[ctx->entries.i].name)) {
+                                        ctx->entries.i = 0;
                                         fs_changed = 1;
                                 }
                         } else if (ch == 'm') {
@@ -436,30 +560,32 @@ display(fex_context *ctx)
                 size_t visible_lines = ctx->term.h - 2;  // -2 for path + status line
 
                 // Scroll down when selection reaches bottom of screen
-                if (ctx->selection.i >= ctx->hoffset + visible_lines) {
-                        ctx->hoffset = ctx->selection.i - visible_lines + 1;
+                if (ctx->entries.i >= ctx->hoffset + visible_lines) {
+                        ctx->hoffset = ctx->entries.i - visible_lines + 1;
                 }
 
                 // Scroll up when selection reaches top of screen
-                if (ctx->selection.i < ctx->hoffset) {
-                        ctx->hoffset = ctx->selection.i;
+                if (ctx->entries.i < ctx->hoffset) {
+                        ctx->hoffset = ctx->entries.i;
                 }
 
                 // Clamp hoffset to valid range
-                if (ctx->hoffset + visible_lines > ctx->selection.files.len) {
-                        ctx->hoffset = ctx->selection.files.len > visible_lines ?
-                                ctx->selection.files.len - visible_lines : 0;
+                if (ctx->hoffset + visible_lines > ctx->entries.fes.len) {
+                        ctx->hoffset = ctx->entries.fes.len > visible_lines ?
+                                ctx->entries.fes.len - visible_lines : 0;
                 }
-                if (ctx->hoffset >= ctx->selection.files.len) {
+                if (ctx->hoffset >= ctx->entries.fes.len) {
                         ctx->hoffset = 0;
                 }
 
                 if (fs_changed) {
                         for (size_t i = 0; files[i]; ++i) {
                                 free(files[i]);
+                                free(ctx->entries.fes.data[i].owner);
+                                free(ctx->entries.fes.data[i].group);
                         }
                         free(files);
-                        dyn_array_clear(ctx->selection.files);
+                        dyn_array_clear(ctx->entries.fes);
                         ctx->last_query = NULL;
                 }
         }
@@ -505,9 +631,9 @@ main(int argc, char **argv)
                         .w = w,
                         .h = h,
                 },
-                .selection = {
+                .entries = {
                         .i = 0,
-                        .files = dyn_array_empty(str_array),
+                        .fes = dyn_array_empty(FE_array),
                 },
                 .filepath = filepath,
                 .marked = sizet_set_create(sizet_hash, sizet_cmp, NULL),
