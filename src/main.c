@@ -10,6 +10,7 @@
 #include <forge/viewer.h>
 #include <forge/array.h>
 #include <forge/rdln.h>
+#include <forge/utils.h>
 
 #include <stdio.h>
 #include <stdint.h>
@@ -52,6 +53,7 @@ typedef struct {
         } selection;
         char *filepath;
         sizet_set marked;
+        const char *last_query;
 } fex_context;
 
 static void
@@ -165,6 +167,37 @@ rename_selection(fex_context *ctx)
 
         if (rename(path, s) != 0) {
                 forge_err_wargs("failed to rename `%s` to `%s`", path, s);
+        }
+}
+
+static void
+search(fex_context *ctx,
+       int          jmp,
+       int          rev)
+{
+        NOOP(rev);
+
+        if (!jmp) {
+                CURSOR_UP(1);
+                ctx->last_query = forge_rdln("Query: ");
+        } else if (!ctx->last_query) {
+                return;
+        }
+
+        if (!rev) {
+                for (size_t i = ctx->selection.i+1; i < ctx->selection.files.len; ++i) {
+                        if (forge_utils_regex(ctx->last_query, ctx->selection.files.data[i])) {
+                                ctx->selection.i = i;
+                                break;
+                        }
+                }
+        } else {
+                for (size_t i = ctx->selection.i-1; i > 0; --i) {
+                        if (forge_utils_regex(ctx->last_query, ctx->selection.files.data[i])) {
+                                ctx->selection.i = i;
+                                break;
+                        }
+                }
         }
 }
 
@@ -287,13 +320,18 @@ display(fex_context *ctx)
                                         ctx->selection.i = 0;
                                         fs_changed = 1;
                                 }
-                        }
-                        else if (ch == 'm') {
+                        } else if (ch == 'm') {
                                 if (sizet_set_contains(&ctx->marked, ctx->selection.i)) {
                                         sizet_set_remove(&ctx->marked, ctx->selection.i);
                                 } else {
                                         sizet_set_insert(&ctx->marked, ctx->selection.i);
                                 }
+                        } else if (ch == '/') {
+                                search(ctx, /*jmp=*/0, /*rev=*/0);
+                        } else if (ch == 'n') {
+                                search(ctx, /*jmp=*/1, /*rev=*/0);
+                        } else if (ch == 'N') {
+                                search(ctx, /*jmp=*/1, /*rev=*/1);
                         }
                 } break;
                 default: break;
@@ -305,6 +343,7 @@ display(fex_context *ctx)
                         }
                         free(files);
                         dyn_array_clear(ctx->selection.files);
+                        ctx->last_query = NULL;
                 }
         }
 
@@ -358,7 +397,8 @@ main(int argc, char **argv)
                         .files = dyn_array_empty(str_array),
                 },
                 .filepath = filepath,
-                .marked = sizet_set_create(sizet_hash, sizet_cmp, NULL)
+                .marked = sizet_set_create(sizet_hash, sizet_cmp, NULL),
+                .last_query = NULL,
         };
 
         display(&ctx);
