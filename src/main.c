@@ -4,6 +4,7 @@
 #include <forge/cmd.h>
 #include <forge/arg.h>
 #include <forge/io.h>
+#include <forge/cstr.h>
 
 #include <stdio.h>
 #include <stdint.h>
@@ -11,6 +12,8 @@
 #include <unistd.h>
 #include <string.h>
 #include <assert.h>
+
+static void rm_file(const char *fp);
 
 struct {
         uint32_t flags;
@@ -38,6 +41,43 @@ selection_down(size_t *s, size_t n)
 {
         if (*s < n-1) {
                 ++(*s);
+        }
+}
+
+static void
+rm_dir(const char *fp)
+{
+        char **files = ls(fp);
+
+        for (size_t i = 0; files && files[i]; ++i) {
+                if (!strcmp(files[i], "..")) continue;
+                if (!strcmp(files[i], "."))  continue;
+                char *path = forge_cstr_builder(fp, "/", files[i], NULL);
+                if (forge_io_is_dir(path)) {
+                        rm_dir(path);
+                } else {
+                        rm_file(path);
+                }
+                free(path);
+                free(files[i]);
+        }
+
+        if (remove(fp) != 0) {
+                perror("remove");
+                exit(1);
+        }
+}
+
+static void
+rm_file(const char *fp)
+{
+        if (forge_io_is_dir(fp)) {
+                rm_dir(fp);
+        } else {
+                if (remove(fp) != 0) {
+                        perror("remove");
+                        exit(1);
+                }
         }
 }
 
@@ -82,7 +122,8 @@ display(fex_context *ctx)
                         }
                 } break;
                 case USER_INPUT_TYPE_NORMAL: {
-                        if (ch == 'q') goto done;
+                        if      (ch == 'q') goto done;
+                        else if (ch == 'd') rm_file(files[selection]);
                 } break;
                 default: break;
                 }
