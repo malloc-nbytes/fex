@@ -1,3 +1,5 @@
+#include "config.h"
+
 #include <forge/colors.h>
 #include <forge/ctrl.h>
 #include <forge/err.h>
@@ -430,7 +432,7 @@ display(ie_context *ctx)
 
                 // Header
                 char *abspath = forge_io_resolve_absolute_path(ctx->filepath);
-                printf("Directory listing for " INVERT BLUE "%s" RESET "\n", abspath);
+                printf(YELLOW BOLD "(I)nteractive.(E)xplorer-v" VERSION RESET " list. " INVERT BLUE "%s" RESET "\n", abspath);
                 free(abspath);
 
                 // Print files
@@ -502,12 +504,16 @@ display(ie_context *ctx)
                 }
 
                 // Directory status
-                printf(BOLD WHITE "%zu items" RESET "  (%zu dirs)" RESET "  [" YELLOW "%zu" RESET "/" YELLOW "%zu" RESET "]\n",
+                printf(BOLD WHITE "%zu items" RESET "  (%zu dirs)" RESET "  [" YELLOW "%zu" RESET "/" YELLOW "%zu" RESET "]",
                        ctx->entries.fes.len - 2,
                        dirs_n - 2,
                        ctx->entries.i+1,
                        ctx->entries.fes.len);
-
+                if (sizet_set_size(&ctx->marked) > 0) {
+                        printf(YELLOW "  %zu" RESET " MARKED (u to unmark)\n", sizet_set_size(&ctx->marked));
+                } else {
+                        putchar('\n');
+                }
 
                 char ch;
                 forge_ctrl_input_type ty = forge_ctrl_get_input(&ch);

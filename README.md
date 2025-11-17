@@ -1,1 +1,1 @@
-# (i)interactive (e)explorer
+# (i)nteractive (e)xplorer

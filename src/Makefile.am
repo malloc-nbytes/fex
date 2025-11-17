@@ -1,8 +1,8 @@
-bin_PROGRAMS = fex
+bin_PROGRAMS = ie
 
 # All .c files in this directory automatically
-fex_SOURCES = main.c
+ie_SOURCES = main.c
 
 # Include our own headers
-fex_CFLAGS = $(AM_CFLAGS) -O2
-fex_LDADD = -lforge
+ie_CFLAGS = $(AM_CFLAGS) -O2
+ie_LDADD = -lforge

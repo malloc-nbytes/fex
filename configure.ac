@@ -1,4 +1,4 @@
-AC_INIT([ie], [0.1], [zdhdev@yahoo.com])
+AC_INIT([ie], [1.0.0], [zdhdev@yahoo.com])
 AM_INIT_AUTOMAKE([foreign subdir-objects])
 
 AC_CONFIG_HEADERS([src/include/config.h])
