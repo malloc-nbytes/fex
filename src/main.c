@@ -59,7 +59,7 @@ typedef struct {
         sizet_set marked;
         const char *last_query;
         size_t hoffset;
-} fex_context;
+} ie_context;
 
 unsigned
 sizet_hash(size_t *i)
@@ -131,7 +131,7 @@ format_time(time_t mtime)
 }
 
 static void
-selection_up(fex_context *ctx)
+selection_up(ie_context *ctx)
 {
         if (ctx->entries.i > 0) {
                 --ctx->entries.i;
@@ -139,7 +139,7 @@ selection_up(fex_context *ctx)
 }
 
 static void
-selection_down(fex_context *ctx)
+selection_down(ie_context *ctx)
 {
         if (ctx->entries.i < ctx->entries.fes.len-1) {
                 ++ctx->entries.i;
@@ -184,7 +184,7 @@ rm_file(const char *fp)
 }
 
 static int
-cd_selection(fex_context *ctx,
+cd_selection(ie_context *ctx,
              const char  *to)
 {
         if (forge_io_is_dir(to)) {
@@ -206,7 +206,7 @@ cd_selection(fex_context *ctx,
 }
 
 static void
-remove_selection(fex_context *ctx)
+remove_selection(ie_context *ctx)
 {
         str_array confirm = dyn_array_empty(str_array);
         size_t_array indices = dyn_array_empty(size_t_array);
@@ -249,14 +249,14 @@ remove_selection(fex_context *ctx)
 }
 
 static void
-clearln(fex_context *ctx)
+clearln(ie_context *ctx)
 {
         for (size_t i = 0; i < ctx->term.w; ++i) putchar(' ');
         forge_ctrl_cursor_to_col(1);
 }
 
 static int
-rename_selection(fex_context *ctx)
+rename_selection(ie_context *ctx)
 {
         CURSOR_UP(1);
         clearln(ctx);
@@ -280,7 +280,7 @@ rename_selection(fex_context *ctx)
 }
 
 static void
-search(fex_context *ctx,
+search(ie_context *ctx,
        int          jmp,
        int          rev)
 {
@@ -311,7 +311,7 @@ search(fex_context *ctx,
 }
 
 static int
-ctrl_x(fex_context *ctx)
+ctrl_x(ie_context *ctx)
 {
         char ch;
         forge_ctrl_input_type ty = forge_ctrl_get_input(&ch);
@@ -348,7 +348,7 @@ is_like_compar(const void *a,
 }
 
 static void
-mark_or_unmark_selection(fex_context *ctx, int mark)
+mark_or_unmark_selection(ie_context *ctx, int mark)
 {
         if (ctx->entries.i == 0) {
                 for (size_t i = 2; i < ctx->entries.fes.len; ++i) {
@@ -370,7 +370,7 @@ mark_or_unmark_selection(fex_context *ctx, int mark)
 }
 
 static void
-display(fex_context *ctx)
+display(ie_context *ctx)
 {
         assert(ctx->filepath);
 
@@ -625,7 +625,7 @@ main(int argc, char **argv)
                 forge_err("could not get the terminal size");
         }
 
-        fex_context ctx = {
+        ie_context ctx = {
                 .term = {
                         .t = t,
                         .w = w,
