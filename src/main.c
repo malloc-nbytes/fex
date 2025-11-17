@@ -11,6 +11,7 @@
 #include <forge/array.h>
 #include <forge/rdln.h>
 #include <forge/utils.h>
+#include <forge/chooser.h>
 
 #include <stdio.h>
 #include <stdint.h>
@@ -55,7 +56,7 @@ typedef struct {
         size_t hoffset;
 } fex_context;
 
-static void minisleep(void) { usleep(700000/2); }
+static void minisleep(void) { usleep(800000/2); }
 
 static void
 selection_up(fex_context *ctx)
@@ -135,24 +136,44 @@ cd_selection(fex_context *ctx,
 static void
 remove_selection(fex_context *ctx)
 {
+        str_array confirm = dyn_array_empty(str_array);
+        size_t_array indices = dyn_array_empty(size_t_array);
+
         if (sizet_set_size(&ctx->marked) > 0) {
                 size_t **ar = sizet_set_iter(&ctx->marked);
                 for (size_t i = 0; ar[i]; ++i) {
-                        const char *path = ctx->selection.files.data[*ar[i]];
+                        char *path = ctx->selection.files.data[*ar[i]];
                         if (!strcmp(path, "..") || !strcmp(path, ".")) {
                                 continue;
                         }
-                        rm_file(path);
-                        sizet_set_remove(&ctx->marked, *ar[i]);
+                        dyn_array_append(confirm, path);
+                        dyn_array_append(indices, *ar[i]);
                 }
                 free(ar);
         } else {
-                const char *path = ctx->selection.files.data[ctx->selection.i];
+                char *path = ctx->selection.files.data[ctx->selection.i];
                 if (!strcmp(path, "..") || !strcmp(path, ".")) {
                         return;
                 }
-                rm_file(path);
+                dyn_array_append(confirm, path);
         }
+
+        forge_ctrl_clear_terminal();
+        for (size_t i = 0; i < confirm.len; ++i) {
+                printf(RED BOLD "--- %s" RESET "\n", confirm.data[i]);
+        }
+
+        int choice = forge_chooser_yesno("Remove these files?", NULL, 1);
+        if (choice) {
+                for (size_t i = 0; i < confirm.len; ++i) {
+                        rm_file(confirm.data[i]);
+                        if (indices.len > 0) {
+                                sizet_set_remove(&ctx->marked, indices.data[i]);
+                        }
+                }
+        }
+
+        dyn_array_free(confirm);
 }
 
 static void
@@ -162,7 +183,7 @@ clearln(fex_context *ctx)
         forge_ctrl_cursor_to_col(1);
 }
 
-static void
+static int
 rename_selection(fex_context *ctx)
 {
         CURSOR_UP(1);
@@ -177,26 +198,13 @@ rename_selection(fex_context *ctx)
 
         char *s = forge_rdln(NULL);
 
+        if (!s || strlen(s) == 0) return 0;
+
         if (rename(path, s) != 0) {
                 forge_err_wargs("failed to rename `%s` to `%s`", path, s);
         }
-}
 
-static void
-enable_mouse(void)
-{
-        // Enable SGR mouse mode (works in almost all modern terminals)
-        printf("\033[?1006h");      // SGR extended mouse mode (best)
-        printf("\033[?1002h");      // Enable button-event tracking (optional: drag)
-        printf("\033[?1000h");      // Basic mouse tracking (fallback)
-        fflush(stdout);
-}
-
-static void
-disable_mouse(void)
-{
-    printf("\033[?1006l\033[?1002l\033[?1000l");
-    fflush(stdout);
+        return 1;
 }
 
 static void
@@ -238,13 +246,55 @@ ctrl_x(fex_context *ctx)
 
         if (ty == USER_INPUT_TYPE_NORMAL && ch == '\n') {
                 return cd_selection(ctx, "..");
+        } else if (ty == USER_INPUT_TYPE_CTRL && ch == CTRL_Q) {
+                return rename_selection(ctx);
         }
  bad:
         CURSOR_UP(1);
         clearln(ctx);
-        printf(INVERT BOLD RED "Unknown Sequence" RESET "\n");
+        printf(INVERT BOLD RED "C-x: Unknown Sequence" RESET "\n");
         minisleep();
         return 0;
+}
+
+static int
+is_like_compar(const void *a,
+               const void *b)
+{
+        const char *const *pa = a;
+        const char *const *pb = b;
+        const char *na = *pa;
+        const char *nb = *pb;
+
+        if (strcmp(na, ".") == 0)  return -1;
+        if (strcmp(nb, ".") == 0)  return  1;
+
+        if (strcmp(na, "..") == 0) return -1;
+        if (strcmp(nb, "..") == 0) return  1;
+
+        return strcmp(na, nb);
+}
+
+static void
+mark_or_unmark_selection(fex_context *ctx, int mark)
+{
+        if (ctx->selection.i == 0) {
+                for (size_t i = 2; i < ctx->selection.files.len; ++i) {
+                        if (!mark && sizet_set_contains(&ctx->marked, i)) {
+                                sizet_set_remove(&ctx->marked, i);
+                        } else if (mark && !sizet_set_contains(&ctx->marked, i)) {
+                                sizet_set_insert(&ctx->marked, i);
+                        }
+                }
+        } else if (ctx->selection.i != 1) {
+                if (!mark && sizet_set_contains(&ctx->marked, ctx->selection.i)) {
+                        sizet_set_remove(&ctx->marked, ctx->selection.i);
+                } else if (mark && !sizet_set_contains(&ctx->marked, ctx->selection.i)) {
+                        sizet_set_insert(&ctx->marked, ctx->selection.i);
+                }
+                selection_down(ctx);
+        }
+
 }
 
 static void
@@ -273,35 +323,29 @@ display(fex_context *ctx)
                         }
                         fs_changed = 0;
 
-                        // Put . and .. in correct spots, count files.
-                        for (size_t i = 0; files[i]; ++i) {
-                                if (!strcmp(files[i], ".")) {
-                                        char *tmp = files[0];
-                                        files[0] = files[i];
-                                        files[i] = tmp;
-                                } else if (!strcmp(files[i], "..")) {
-                                        char *tmp = files[1];
-                                        files[1] = files[i];
-                                        files[i] = tmp;
-                                }
+                        // Sort files
+                        size_t count = 0;
+                        while (files[count]) ++count;
+                        qsort(files, count, sizeof(*files), is_like_compar);
+                        for (size_t i = 0; i < count; ++i) {
                                 dyn_array_append(ctx->selection.files, files[i]);
                         }
-
-                        ctx->selection.files.data[0] = files[0];
-                        ctx->selection.files.data[1] = files[1];
                 }
 
+                // If we are out-of-bounds (from deleting, marking, etc.) move
+                // to valid location.
                 while (ctx->selection.i > ctx->selection.files.len-1) {
                         --ctx->selection.i;
                 }
 
+                // Header
                 char *abspath = forge_io_resolve_absolute_path(ctx->filepath);
                 printf("Directory listing for " BOLD WHITE "%s" RESET "\n", abspath);
                 free(abspath);
 
-                size_t dirs_n = 0;
 
                 // Print files
+                size_t dirs_n = 0;
                 size_t start = ctx->hoffset;
                 size_t end = start + ctx->term.h - 2;
                 if (end > ctx->selection.files.len)
@@ -338,8 +382,8 @@ display(fex_context *ctx)
                 }
 
                 // Directory status
-                printf(BOLD WHITE "%zu files, %zu directories" RESET "\n",
-                       ctx->selection.files.len - dirs_n, dirs_n - 2);
+                printf(BOLD WHITE "%zu files, %zu directories" RESET " [" YELLOW "%zu" RESET "/" YELLOW "%zu" RESET "]\n",
+                       ctx->selection.files.len - dirs_n, dirs_n - 2, ctx->selection.i+1, ctx->selection.files.len);
 
                 char ch;
                 forge_ctrl_input_type ty = forge_ctrl_get_input(&ch);
@@ -367,8 +411,7 @@ display(fex_context *ctx)
                         else if (ch == 'j') selection_down(ctx);
                         else if (ch == 'k') selection_up(ctx);
                         else if (ch == 'r') {
-                                rename_selection(ctx);
-                                fs_changed = 1;
+                                fs_changed = rename_selection(ctx);
                         }
                         else if (ch == '\n') {
                                 if (cd_selection(ctx, files[ctx->selection.i])) {
@@ -376,12 +419,9 @@ display(fex_context *ctx)
                                         fs_changed = 1;
                                 }
                         } else if (ch == 'm') {
-                                if (sizet_set_contains(&ctx->marked, ctx->selection.i)) {
-                                        sizet_set_remove(&ctx->marked, ctx->selection.i);
-                                } else {
-                                        sizet_set_insert(&ctx->marked, ctx->selection.i);
-                                }
-                                selection_down(ctx);
+                                mark_or_unmark_selection(ctx, /*mark=*/1);
+                        } else if (ch == 'u') {
+                                mark_or_unmark_selection(ctx, /*mark=*/0);
                         } else if (ch == '/') {
                                 search(ctx, /*jmp=*/0, /*rev=*/0);
                         } else if (ch == 'n') {
@@ -430,7 +470,6 @@ display(fex_context *ctx)
         if (!forge_ctrl_disable_raw_terminal(STDIN_FILENO, &ctx->term.t)) {
                 forge_err("could not disable raw terminal");
         }
-        disable_mouse();
 }
 
 int
@@ -459,7 +498,6 @@ main(int argc, char **argv)
         if (!forge_ctrl_get_terminal_xy(&w, &h)) {
                 forge_err("could not get the terminal size");
         }
-        enable_mouse();
 
         fex_context ctx = {
                 .term = {
