@@ -1,4 +1,4 @@
-* Notes [14%]
+* Notes [12%]
 - [X] If an executable is clicked:
   - [X] prompt for arguemnts
   - [X] run exe
