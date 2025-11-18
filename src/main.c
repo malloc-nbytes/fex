@@ -546,6 +546,7 @@ move_selection(ie_context *ctx)
                                 }
                                 free(newpath);
                                 free(oldpath);
+                                sizet_set_remove(&ctx->marked, *idxs[i]);
                         }
                         return 1;
                 }
