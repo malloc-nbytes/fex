@@ -1,0 +1,13 @@
+* Notes [0%]
+- [ ] If an executable is clicked:
+  - [ ] prompt for arguemnts
+  - [ ] run exe
+- [ ] If audio is clicked:
+  - [ ] check for ampire
+  - [ ] play if present
+- [ ] add help screen
+- [ ] keep track of state between directories
+- [ ] add multipanes
+- [ ] implement copy
+  - [ ] copy between panes
+- [ ] implement move

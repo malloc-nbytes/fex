@@ -22,7 +22,7 @@
 #include <string.h>
 #include <assert.h>
 #include <limits.h>
-
+#include <sys/wait.h>
 #include <sys/stat.h>
 #include <pwd.h>
 #include <grp.h>
@@ -186,14 +186,61 @@ rm_file(const char *fp)
 }
 
 static int
-cd_selection(ie_context *ctx,
-             const char  *to)
+clicked(ie_context *ctx,
+        const char  *to)
 {
+        const FE *fe = &ctx->entries.fes.data[ctx->entries.i];
+
         if (forge_io_is_dir(to)) {
                 free(ctx->filepath);
                 ctx->filepath = forge_io_resolve_absolute_path(to);
                 CD(ctx->filepath, forge_err_wargs("could not cd() to %s", ctx->filepath));
                 return 1;
+        } else if (!fe->stat_failed && (fe->st.st_mode & (S_IXUSR|S_IXGRP|S_IXOTH))) {
+                str_array args = dyn_array_empty(str_array);
+                dyn_array_append(args, fe->name);
+
+                char *prompt = forge_rdln("Arguments: ");
+
+                char *tok = strtok(prompt, " ");
+                while (tok) {
+                        dyn_array_append(args, strdup(tok));
+                        tok = strtok(prompt, tok);
+                }
+                dyn_array_append(args, NULL);
+
+                pid_t pid = fork();
+
+                if (pid == -1) {
+                        perror("fork");
+                        _exit(1);
+                }
+
+                if (pid == 0) {
+                        execv(fe->name, args.data);
+                        perror("execv");
+                        exit(1);
+                }
+
+                // Parent process, wait for child
+                int status;
+                if (waitpid(pid, &status, 0) == -1) {
+                        perror("waitpid");
+                        return -1;
+                }
+
+                printf("\nPress any key to continue...\n");
+                char _; (void)forge_ctrl_get_input(&_);
+
+                dyn_array_free(args);
+
+                return 1;
+                /* if (WIFEXITED(status)) { */
+                /*         return WEXITSTATUS(status); */
+                /* } else if (WIFSIGNALED(status)) { */
+                /*         //printf("Child killed by signal %d\n", WTERMSIG(status)); */
+                /*         return 1; */
+                /* } */
         } else {
                 char **lns = forge_io_read_file_to_lines(to);
                 size_t lns_n;
@@ -319,7 +366,7 @@ ctrl_x(ie_context *ctx)
         forge_ctrl_input_type ty = forge_ctrl_get_input(&ch);
 
         if (ty == USER_INPUT_TYPE_NORMAL && ch == '\n') {
-                return cd_selection(ctx, "..");
+                return clicked(ctx, "..");
         } else if (ty == USER_INPUT_TYPE_CTRL && ch == CTRL_Q) {
                 return rename_selection(ctx);
         }
@@ -544,7 +591,7 @@ display(ie_context *ctx)
                                 fs_changed = rename_selection(ctx);
                         }
                         else if (ch == '\n') {
-                                if (cd_selection(ctx, ctx->entries.fes.data[ctx->entries.i].name)) {
+                                if (clicked(ctx, ctx->entries.fes.data[ctx->entries.i].name)) {
                                         ctx->entries.i = 0;
                                         fs_changed = 1;
                                 }
@@ -558,6 +605,10 @@ display(ie_context *ctx)
                                 search(ctx, /*jmp=*/1, /*rev=*/0);
                         } else if (ch == 'N') {
                                 search(ctx, /*jmp=*/1, /*rev=*/1);
+                        } else if (ch == 'g') {
+                                ctx->entries.i = 0;
+                        } else if (ch == 'G') {
+                                ctx->entries.i = ctx->entries.fes.len-1;
                         }
                 } break;
                 default: break;
