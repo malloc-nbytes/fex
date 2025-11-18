@@ -79,17 +79,9 @@ struct {
         .ctxs = dyn_array_empty(ie_context_array),
 };
 
-unsigned
-sizet_hash(size_t *i)
-{
-        return *i;
-}
-
-int
-sizet_cmp(size_t *x, size_t *y)
-{
-        return *x - *y;
-}
+static unsigned sizet_hash(size_t *i)           { return *i; }
+static int      sizet_cmp(size_t *x, size_t *y) { return *x - *y; }
+static void     minisleep(void)                 { usleep(800000/2); }
 
 static ie_context *
 ie_context_alloc(const char *filepath)
@@ -109,8 +101,6 @@ ie_context_alloc(const char *filepath)
 
         return ctx;
 }
-
-static void minisleep(void) { usleep(800000/2); }
 
 static void
 mode_string(mode_t mode, char buf[11])
@@ -344,9 +334,9 @@ rename_selection(ie_context *ctx)
 {
         CURSOR_UP(1);
         clearln(ctx);
-        printf(BOLD WHITE "--- Rename ---" RESET);
 
         const char *path = ctx->entries.fes.data[ctx->entries.i]->name;
+        printf(BOLD WHITE "Rename [" YELLOW "%s" RESET "]" RESET, path);
 
         forge_ctrl_cursor_to_first_line();
         CURSOR_DOWN(ctx->entries.i + 1);
