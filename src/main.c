@@ -68,7 +68,7 @@ typedef struct {
 DYN_ARRAY_TYPE(ie_context *, ie_context_array);
 
 static void rm_file(const char *fp);
-static void display(ie_context *ctx);
+static void display(void);
 
 struct {
         size_t ctxs_i;
@@ -93,7 +93,7 @@ sizet_cmp(size_t *x, size_t *y)
 static ie_context *
 ie_context_alloc(const char *filepath)
 {
-        ie_context *ctx = (ie_context *)malloc(sizeof(ie_context));
+        ie_context *ctx  = (ie_context *)malloc(sizeof(ie_context));
         ctx->term.w      = g_config.term.w;
         ctx->term.h      = g_config.term.h;
         ctx->entries.i   = 0;
@@ -402,8 +402,7 @@ ctrl_x(ie_context *ctx)
                 return rename_selection(ctx);
         } else if (ty == USER_INPUT_TYPE_NORMAL && ch == 'c') {
                 dyn_array_append(g_state.ctxs, ie_context_alloc(ctx->filepath));
-                display(g_state.ctxs.data[++g_state.ctxs_i]);
-                CD(ctx->filepath, forge_err_wargs("failed to cd() to %s", ctx->filepath));
+                ++g_state.ctxs_i;
                 return 1;
         } else if (ty == USER_INPUT_TYPE_NORMAL && ch == 'b') {
                 size_t ctxs_n = g_state.ctxs.len;
@@ -422,12 +421,6 @@ ctrl_x(ie_context *ctx)
 
                 size_t old_ctxs_i = g_state.ctxs_i;
                 g_state.ctxs_i = choice;
-
-                display(g_state.ctxs.data[choice]);
-
-                CD(g_state.ctxs.data[old_ctxs_i]->filepath,
-                   forge_err_wargs("failed to cd() to %s",
-                                   g_state.ctxs.data[old_ctxs_i]->filepath));
 
                 return 1;
         }
@@ -481,19 +474,25 @@ mark_or_unmark_selection(ie_context *ctx, int mark)
 }
 
 static void
-display(ie_context *ctx)
+display(void)
 {
-        assert(ctx->filepath);
-
-        CD(ctx->filepath, forge_err_wargs("could not cd() to %s", ctx->filepath));
-
-        ctx->entries.i = 0;
-
-        int fs_changed  = 1;
-        char **files    = NULL;
+        int fs_changed     = 1;
+        char **files       = NULL;
+        size_t last_ctxs_i = g_state.ctxs_i;
+        int first          = 1;
 
         while (1) {
                 forge_ctrl_clear_terminal();
+
+                ie_context *ctx = g_state.ctxs.data[g_state.ctxs_i];
+                CD(ctx->filepath, forge_err_wargs("could not cd() to %s", ctx->filepath));
+
+                if (first || g_state.ctxs_i != last_ctxs_i) {
+                        first = 0;
+                        ctx->entries.i = 0;
+                        fs_changed = 1;
+                        last_ctxs_i = g_state.ctxs_i;
+                }
 
                 if (fs_changed) {
                         files = ls(ctx->filepath);
@@ -713,8 +712,8 @@ int
 main(int argc, char **argv)
 {
         struct termios t;
-        size_t w, h;
         char *filepath = NULL;
+        size_t w, h;
 
         forge_arg *arghd = forge_arg_alloc(argc, argv, 1);
         forge_arg *arg = arghd;
@@ -732,7 +731,7 @@ main(int argc, char **argv)
 
         if (!filepath) filepath = cwd();
 
-        if (!forge_ctrl_get_terminal_xy(&w, &h)) {
+        if (!forge_ctrl_get_terminal_xy(&g_config.term.w, &g_config.term.h)) {
                 forge_err("could not get the terminal size");
         }
 
@@ -742,7 +741,7 @@ main(int argc, char **argv)
 
         dyn_array_append(g_state.ctxs, ie_context_alloc(filepath));
 
-        display(g_state.ctxs.data[0]);
+        display();
 
         if (!forge_ctrl_disable_raw_terminal(STDIN_FILENO, &g_config.term.t)) {
                 forge_err("could not disable raw terminal");

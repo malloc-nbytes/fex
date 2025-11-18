@@ -13,7 +13,7 @@ AC_CHECK_LIB([forge], [main], [], [
     AC_MSG_ERROR([libforge not found. Please install libforge (https://github.com/malloc-nbytes/forge).])
 ])
 
-: ${CFLAGS="-O2 -pipe"}
+: ${CFLAGS="-O2 -pipe -Wextra -pedantic"}
 
 AC_DEFINE_UNQUOTED([PREFIX], ["$prefix"], [Installation prefix])
 AC_DEFINE_UNQUOTED([COMPILE_FLAGS], ["$CFLAGS $CPPFLAGS"], [Compilation flags used])
