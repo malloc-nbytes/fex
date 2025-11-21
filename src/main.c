@@ -32,6 +32,35 @@
 #define CMD_SEARCH "search"
 #define CMD_HELP   "help"
 
+extern char **environ;
+
+static char *g_help_buffer[] = {
+        "Help:",
+        "",
+        "Navigation:",
+        "  ARROW_UP,   k,        C-p  - navigate up",
+        "  ARROW_DOWN, j,        C-n  - navigate down",
+        "  ENTER,      C-j            - interact",
+        "  C-x C-j,    C-x ENTER      - navigate backwards one directory",
+        "  /                          - search",
+        "  n                          - search next",
+        "  N                          - search previous",
+        "  g                          - top of directory",
+        "  G                          - bottom of directory",
+        "",
+        "File Manipulation:",
+        "  C-x C-q,    r              - rename file",
+        "  M                          - move file (or marked)",
+        "  d                          - delete file (or marked)",
+        "",
+        "Misc:",
+        "  q                          - quit",
+        "  m                          - mark",
+        "  u                          - unmark",
+        "  C-x b                      - open all instances",
+        "  :                          - command",
+};
+
 FORGE_SET_TYPE(size_t, sizet_set)
 
 struct {
@@ -573,6 +602,15 @@ move_selection(ie_context *ctx)
         }
 }
 
+static void
+display_help(void)
+{
+        forge_viewer *v = forge_viewer_alloc(g_help_buffer,
+                                             sizeof(g_help_buffer)/sizeof(*g_help_buffer), 0);
+        forge_viewer_display(v);
+        forge_viewer_free(v);
+}
+
 static int
 do_command(ie_context *ctx)
 {
@@ -584,22 +622,33 @@ do_command(ie_context *ctx)
         if (!strcmp(command, CMD_SEARCH)) {
                 search(ctx, /*jmp=*/0, /*rev=*/0);
         } else if (!strcmp(command, CMD_HELP)) {
-                assert(0 && "todo");
-        } else if (command[0] == '$') {
-                char *out = cmdout(command+1);
-
-                if (out) {
-                        printf("%s\n", out);
-                        free(out);
-                } else {
-                        printf("<no output>\n");
-                }
-
-                printf("\nPress any key to continue...\n");
-                char _; (void)forge_ctrl_get_input(&_);
+                display_help();
         }
 
         return 0;
+}
+
+static int
+issue_bash_cmd(ie_context *ctx)
+{
+        char *bashcmd = forge_rdln("! ");
+
+        if (!bashcmd || strlen(bashcmd) == 0) return 0;
+
+        char *out = cmdout(bashcmd);
+
+        if (out) {
+                printf("%s\n", out);
+                free(out);
+        } else {
+                printf("<no output>\n");
+        }
+
+        printf("\nPress any key to continue...\n");
+        char _; (void)forge_ctrl_get_input(&_);
+        free(bashcmd);
+
+        return 1;
 }
 
 static void
@@ -799,6 +848,10 @@ display(void)
                                 fs_changed = move_selection(ctx);
                         } else if (ch == ':') {
                                 fs_changed = do_command(ctx);
+                        } else if (ch == '?') {
+                                display_help();
+                        } else if (ch == '!') {
+                                issue_bash_cmd(ctx);
                         }
                 } break;
                 default: break;
