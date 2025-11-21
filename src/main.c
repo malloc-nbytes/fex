@@ -29,6 +29,9 @@
 #include <time.h>
 #include <errno.h>
 
+#define CMD_SEARCH "search"
+#define CMD_HELP   "help"
+
 FORGE_SET_TYPE(size_t, sizet_set)
 
 struct {
@@ -570,6 +573,35 @@ move_selection(ie_context *ctx)
         }
 }
 
+static int
+do_command(ie_context *ctx)
+{
+        CURSOR_UP(1);
+        char *command = forge_rdln(": ");
+
+        if (!command || strlen(command) == 0) return 0;
+
+        if (!strcmp(command, CMD_SEARCH)) {
+                search(ctx, /*jmp=*/0, /*rev=*/0);
+        } else if (!strcmp(command, CMD_HELP)) {
+                assert(0 && "todo");
+        } else if (command[0] == '$') {
+                char *out = cmdout(command+1);
+
+                if (out) {
+                        printf("%s\n", out);
+                        free(out);
+                } else {
+                        printf("<no output>\n");
+                }
+
+                printf("\nPress any key to continue...\n");
+                char _; (void)forge_ctrl_get_input(&_);
+        }
+
+        return 0;
+}
+
 static void
 display(void)
 {
@@ -765,6 +797,8 @@ display(void)
                                 ctx->entries.i = ctx->entries.fes.len-1;
                         } else if (ch == 'M') {
                                 fs_changed = move_selection(ctx);
+                        } else if (ch == ':') {
+                                fs_changed = do_command(ctx);
                         }
                 } break;
                 default: break;
