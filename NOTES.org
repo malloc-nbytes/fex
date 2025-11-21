@@ -1,13 +1,12 @@
-* Notes [22%]
+* Notes [77%]
 - [X] If an executable is clicked:
   - [X] prompt for arguemnts
   - [X] run exe
-- [ ] implement commands
-- [ ] Add a prompt for entering an absolute path
-- [ ] add help screen
-- [ ] keep track of state between directories
+- [X] implement commands
+- [X] add help screen
+- [X] keep track of state between directories
+- [X] Add a prompt for entering an absolute path
 - [ ] add panes
-- [X] implement copy
-- [ ] implement move
 - [ ] implement terminal resizing
-- [ ] ask the user to open certain filetypes (mp3, wav, etc.) and open in that
+- [X] implement copy
+- [X] implement move

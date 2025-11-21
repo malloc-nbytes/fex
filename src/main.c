@@ -449,6 +449,18 @@ buffers_as_strings(const ie_context *ctx, size_t *paths_n)
 }
 
 static int
+manual_directory_entry(ie_context *ctx)
+{
+        char *dir = forge_rdln("cd: ");
+        char *abs = forge_io_resolve_absolute_path(dir);
+
+        ctx->filepath = abs;
+
+        free(dir);
+        return 1;
+}
+
+static int
 ctrl_x(ie_context *ctx)
 {
         char ch;
@@ -481,6 +493,8 @@ ctrl_x(ie_context *ctx)
                 g_state.ctxs_i = choice;
 
                 return 1;
+        } else if (ty == USER_INPUT_TYPE_CTRL && ch == CTRL_F) {
+                return manual_directory_entry(ctx);
         }
 
  bad:
@@ -643,14 +657,7 @@ issue_bash_cmd(ie_context *ctx)
 
         if (!bashcmd || strlen(bashcmd) == 0) return 0;
 
-        char *out = cmdout(bashcmd);
-
-        if (out) {
-                printf("%s\n", out);
-                free(out);
-        } else {
-                printf("<no output>\n");
-        }
+        (void)cmd(bashcmd);
 
         any_key();
         free(bashcmd);
@@ -874,7 +881,7 @@ display(void)
                         } else if (ch == '?') {
                                 display_help();
                         } else if (ch == '!') {
-                                issue_bash_cmd(ctx);
+                                fs_changed = issue_bash_cmd(ctx);
                         } else if (ch == '+' || ch == '%') {
                                 fs_changed = newdir();
                         }
