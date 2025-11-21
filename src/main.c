@@ -52,6 +52,7 @@ static char *g_help_buffer[] = {
         "  C-x C-q,    r              - rename file",
         "  M                          - move file (or marked)",
         "  d                          - delete file (or marked)",
+        "  +           %              - new directory",
         "",
         "Misc:",
         "  q                          - quit",
@@ -59,6 +60,7 @@ static char *g_help_buffer[] = {
         "  u                          - unmark",
         "  C-x b                      - open all instances",
         "  :                          - command",
+        "  !                          - SHELL command",
 };
 
 FORGE_SET_TYPE(size_t, sizet_set)
@@ -242,6 +244,13 @@ rm_file(const char *fp)
         }
 }
 
+static void
+any_key(void)
+{
+        printf("\nPress any key to continue...\n");
+        char _; (void)forge_ctrl_get_input(&_);
+}
+
 static int
 clicked(ie_context *ctx,
         const char  *to)
@@ -286,8 +295,7 @@ clicked(ie_context *ctx,
                         return -1;
                 }
 
-                printf("\nPress any key to continue...\n");
-                char _; (void)forge_ctrl_get_input(&_);
+                any_key();
 
                 dyn_array_free(args);
 
@@ -644,9 +652,24 @@ issue_bash_cmd(ie_context *ctx)
                 printf("<no output>\n");
         }
 
-        printf("\nPress any key to continue...\n");
-        char _; (void)forge_ctrl_get_input(&_);
+        any_key();
         free(bashcmd);
+
+        return 1;
+}
+
+static int
+newdir(void)
+{
+        CURSOR_UP(1);
+        char *name = forge_rdln("mkdir name: ");
+
+        if (!name || strlen(name) == 0) return 0;
+
+        if (mkdir(name, 0755) != 0) {
+                perror("mkdir");
+                any_key();
+        }
 
         return 1;
 }
@@ -852,6 +875,8 @@ display(void)
                                 display_help();
                         } else if (ch == '!') {
                                 issue_bash_cmd(ctx);
+                        } else if (ch == '+' || ch == '%') {
+                                fs_changed = newdir();
                         }
                 } break;
                 default: break;
