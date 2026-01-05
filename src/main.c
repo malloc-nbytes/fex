@@ -1016,7 +1016,7 @@ setup(void)
 
         if (!forge_io_filepath_exists(g_config_filepath)) {
                 forge_io_create_file(g_config_filepath, 1);
-                return 0;
+                return 1;
         }
 
         qcl_config config = qcl_parse_file(g_config_filepath);
