@@ -57,6 +57,7 @@ static char *g_help_buffer[] = {
         "  +           %              - new directory",
         "",
         "Misc:",
+        "  \\                          - toggle ghost path",
         "  q                          - quit",
         "  m                          - mark",
         "  u                          - unmark",
@@ -86,6 +87,10 @@ struct {
                 .h = 0,
         },
         .written_config = {0},
+};
+
+enum {
+        FLAG_TYPE_NOGHOST = 1 << 0,
 };
 
 typedef struct {
@@ -767,6 +772,9 @@ display(void)
         size_t last_ctxs_i = g_state.ctxs_i;
         int first          = 1;
 
+        // Ghosted text by default
+        g_config.flags ^= FLAG_TYPE_NOGHOST;
+
         while (1) {
                 forge_ctrl_clear_terminal();
 
@@ -881,7 +889,7 @@ display(void)
                         }
 
                         // Show ghosted full path on selected line
-                        if (is_selected) {
+                        if (is_selected && (g_config.flags & FLAG_TYPE_NOGHOST)) {
                                 char fullpath[PATH_MAX];
                                 snprintf(fullpath, sizeof(fullpath), "%s/%s", ctx->filepath, e->name);
                                 char *abs = forge_io_resolve_absolute_path(fullpath);
@@ -962,6 +970,8 @@ display(void)
                                 fs_changed = issue_bash_cmd(ctx);
                         } else if (ch == '+' || ch == '%') {
                                 fs_changed = newdir();
+                        } else if (ch == '\\') {
+                                g_config.flags ^= FLAG_TYPE_NOGHOST;
                         }
                 } break;
                 default: break;
