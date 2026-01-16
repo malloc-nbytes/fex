@@ -117,6 +117,7 @@ typedef struct {
         sizet_set marked;
         const char *last_query;
         size_t hoffset;
+        int_array stack;
 } ie_context;
 
 DYN_ARRAY_TYPE(ie_context *, ie_context_array);
@@ -148,6 +149,7 @@ ie_context_alloc(const char *filepath)
         ctx->marked      = sizet_set_create(sizet_hash, sizet_cmp, NULL);
         ctx->last_query  = NULL;
         ctx->hoffset     = 0;
+        ctx->stack       = dyn_array_empty(int_array);
 
         static int uid = 0;
         ctx->uid = uid++;
@@ -309,6 +311,12 @@ clicked(ie_context *ctx,
                 free(ctx->filepath);
                 ctx->filepath = forge_io_resolve_absolute_path(to);
                 CD(ctx->filepath, forge_err_wargs("could not cd() to %s", ctx->filepath));
+                if (!strcmp(to, "..") && ctx->stack.len > 0) {
+                        ctx->entries.i = ctx->stack.data[ctx->stack.len-1];
+                        --ctx->stack.len;
+                }
+                else
+                        dyn_array_append(ctx->stack, ctx->entries.i);
                 return 1;
         } else if (!fe->stat_failed
                    && (fe->st.st_mode & (S_IXUSR|S_IXGRP|S_IXOTH))
@@ -943,7 +951,7 @@ display(void)
                         }
                         else if (ch == '\n') {
                                 if (clicked(ctx, ctx->entries.fes.data[ctx->entries.i]->name)) {
-                                        ctx->entries.i = 0;
+                                        ctx->entries.i = ctx->entries.fes.len >= 2 ? 2 : 1;
                                         fs_changed = 1;
                                 }
                         } else if (ch == 'm') {
