@@ -89,10 +89,6 @@ struct {
         .written_config = {0},
 };
 
-enum {
-        FLAG_TYPE_NOGHOST = 1 << 0,
-};
-
 typedef struct {
         char        *name;
         struct stat  st;
@@ -100,6 +96,8 @@ typedef struct {
         char        *group;
         int          stat_failed;
 } FE;
+
+enum { FT_SHOWGHOST = 1 << 0 };
 
 DYN_ARRAY_TYPE(FE *, FE_array);
 
@@ -780,9 +778,6 @@ display(void)
         size_t last_ctxs_i = g_state.ctxs_i;
         int first          = 1;
 
-        // Ghosted text by default
-        g_config.flags ^= FLAG_TYPE_NOGHOST;
-
         while (1) {
                 forge_ctrl_clear_terminal();
 
@@ -897,7 +892,7 @@ display(void)
                         }
 
                         // Show ghosted full path on selected line
-                        if (is_selected && (g_config.flags & FLAG_TYPE_NOGHOST)) {
+                        if (is_selected && (g_config.flags & FT_SHOWGHOST)) {
                                 char fullpath[PATH_MAX];
                                 snprintf(fullpath, sizeof(fullpath), "%s/%s", ctx->filepath, e->name);
                                 char *abs = forge_io_resolve_absolute_path(fullpath);
@@ -979,7 +974,7 @@ display(void)
                         } else if (ch == '+' || ch == '%') {
                                 fs_changed = newdir();
                         } else if (ch == '\\') {
-                                g_config.flags ^= FLAG_TYPE_NOGHOST;
+                                g_config.flags ^= FT_SHOWGHOST;
                         }
                 } break;
                 default: break;
@@ -1054,6 +1049,12 @@ int
 main(int argc, char **argv)
 {
         if (!setup()) any_key();
+
+        qcl_value *ghostv = qcl_value_get(&g_config.written_config, "ie-showghost");
+        if (ghostv && ghostv->kind == QCL_VALUE_KIND_BOOL) {
+                if (((qcl_value_bool *)ghostv)->b)
+                        g_config.flags |= FT_SHOWGHOST;
+        }
 
         struct termios t;
         char *filepath = NULL;
